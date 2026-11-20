@@ -17,10 +17,37 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Build Autonomous Alter Core
+      - name: Build Alter Core with Custom Icon
         run: |
           mkdir -p app/src/main/java/com/ix7/alter
           mkdir -p app/src/main/assets
+          mkdir -p app/src/main/res/drawable
+
+          cat << 'EOF' > app/src/main/res/drawable/ic_launcher.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp"
+              android:height="108dp"
+              android:viewportWidth="108"
+              android:viewportHeight="108">
+              <path
+                  android:fillColor="#000000"
+                  android:pathData="M0,0h108v108h-108z" />
+              <path
+                  android:strokeColor="#38BDF8"
+                  android:strokeWidth="2.5"
+                  android:fillColor="#00000000"
+                  android:pathData="M54,20 A34,34 0 1,1 53.9,20 Z" />
+              <path
+                  android:strokeColor="#A5F3FC"
+                  android:strokeWidth="1.5"
+                  android:fillColor="#08121E"
+                  android:pathData="M54,30 A24,24 0 1,1 53.9,30 Z" />
+              <path
+                  android:fillColor="#38BDF8"
+                  android:pathData="M54,36 L67,68 L61.5,68 L58.5,60.5 L49.5,60.5 L46.5,68 L41,68 Z M54,44.5 L51,55.5 L57,55.5 Z" />
+          </vector>
+          EOF
 
           cat << 'EOF' > app/src/main/AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
@@ -30,6 +57,8 @@ jobs:
               <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
               <application
                   android:allowBackup="true"
+                  android:icon="@drawable/ic_launcher"
+                  android:roundIcon="@drawable/ic_launcher"
                   android:label="ALTER"
                   android:supportsRtl="true"
                   android:theme="@style/Theme.AppCompat.NoActionBar">
@@ -139,7 +168,6 @@ jobs:
           <style>
             * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; }
             body { background: #000000; color: #E2E8F0; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
-            
             header { padding: 18px 22px; display: flex; justify-content: space-between; align-items: center; }
             .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; letter-spacing: 3px; color: #A5F3FC; font-size: 13px; }
             .dot { width: 7px; height: 7px; background: #38BDF8; border-radius: 50%; box-shadow: 0 0 12px #38BDF8; }
@@ -190,7 +218,7 @@ jobs:
           </div>
 
           <div id="chat">
-            <div class="msg alter">Systems online, Sia. Autonomous core engaged—tell me what to upgrade or who we're impressing today.</div>
+            <div class="msg alter">Systems online, Sia. Custom icon locked in and multi-router core active—drop your OpenRouter key and let's roll.</div>
           </div>
 
           <div class="capsule-wrap">
@@ -208,9 +236,9 @@ jobs:
           <div id="modal">
             <div class="modal-box">
               <h3>NEURAL & GITHUB UPLINK</h3>
-              <label>1. GEMINI API KEY (aistudio.google.com)</label>
-              <input type="text" id="apiKeyInput" placeholder="AIzaSy...">
-              <label>2. GITHUB TOKEN (for Self-Updating)</label>
+              <label>1. AI KEY (OpenRouter sk-or- / Groq gsk_ / Gemini AIza)</label>
+              <input type="text" id="apiKeyInput" placeholder="sk-or-v1-...">
+              <label>2. GITHUB TOKEN (Optional - for Self-Updating)</label>
               <input type="text" id="ghTokenInput" placeholder="ghp_...">
               <button onclick="saveKeys()">ACTIVATE AUTONOMOUS CORE</button>
             </div>
@@ -224,9 +252,9 @@ jobs:
 
           SELF-UPGRADE PROTOCOL:
           You have direct write access to your own GitHub repository (siavashix7/ALTER-APP) via the file ".github/workflows/main.yml".
-          If Sia explicitly asks you to modify your own UI, voice, features, or code, generate the COMPLETE updated YAML content for ".github/workflows/main.yml" (preserving the Android build steps, AndroidManifest.xml, MainActivity.java, and index.html with all existing features) and wrap ONLY the raw YAML inside <SELF_UPDATE>...</SELF_UPDATE> tags at the very end of your response. Confirm briefly in chat that you are pushing the update to GitHub.`;
+          If Sia explicitly asks you to modify your own UI, voice, features, or code, generate the COMPLETE updated YAML content for ".github/workflows/main.yml" and wrap ONLY the raw YAML inside <SELF_UPDATE>...</SELF_UPDATE> tags at the very end of your response.`;
 
-            let history = [];
+            let chatMessages = [];
 
             function setStatus(txt, active = false) {
               document.getElementById('status').innerText = txt;
@@ -242,12 +270,12 @@ jobs:
             }
 
             function saveKeys() {
-              const k = document.getElementById('apiKeyInput').value.trim();
-              const gh = document.getElementById('ghTokenInput').value.trim();
+              const k = document.getElementById('apiKeyInput').value.replace(/\s+/g, '');
+              const gh = document.getElementById('ghTokenInput').value.replace(/\s+/g, '');
               if (k) localStorage.setItem('alter_key', k);
               if (gh) localStorage.setItem('alter_gh', gh);
               document.getElementById('modal').style.display = 'none';
-              setStatus('UPLINKS SAVED');
+              setStatus(k.startsWith('sk-or-') ? 'OPENROUTER LINKED' : k.startsWith('gsk_') ? 'GROQ LINKED' : 'GEMINI LINKED');
             }
 
             window.onload = () => {
@@ -272,7 +300,7 @@ jobs:
             async function pushSelfUpdate(newYaml) {
               const ghToken = localStorage.getItem('alter_gh');
               if (!ghToken) {
-                addMsg("GitHub Token missing. Open UPLINK KEYS and add your ghp_ token so I can push updates myself.", "err");
+                addMsg("GitHub Token missing. Add your ghp_ token in UPLINK KEYS so I can push updates myself.", "err");
                 return;
               }
               setStatus('PUSHING TO GITHUB...', true);
@@ -302,7 +330,7 @@ jobs:
                   const errData = await putRes.json();
                   throw new Error(errData.message || "Push rejected");
                 }
-                addMsg("Self-Update pushed to GitHub! Build triggered—download the new APK from Actions in ~2 mins.", "sys");
+                addMsg("Self-Update pushed to GitHub! Download the new APK from Actions in ~2 mins.", "sys");
                 setStatus('BUILD TRIGGERED', false);
               } catch (err) {
                 addMsg(`GitHub Sync Error: ${err.message}`, "err");
@@ -310,38 +338,77 @@ jobs:
               }
             }
 
+            async function callAI(apiKey) {
+              if (apiKey.startsWith('sk-or-')) {
+                const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+                  method: 'POST',
+                  headers: {
+                    'Authorization': `Bearer ${apiKey}`,
+                    'Content-Type': 'application/json',
+                    'HTTP-Referer': 'https://github.com/siavashix7/ALTER-APP',
+                    'X-Title': 'ALTER IX7'
+                  },
+                  body: JSON.stringify({
+                    model: 'openrouter/free',
+                    messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...chatMessages]
+                  })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data?.error?.message || `OpenRouter HTTP ${res.status}`);
+                return data?.choices?.[0]?.message?.content;
+              }
+
+              if (apiKey.startsWith('gsk_')) {
+                const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+                  method: 'POST',
+                  headers: {
+                    'Authorization': `Bearer ${apiKey}`,
+                    'Content-Type': 'application/json'
+                  },
+                  body: JSON.stringify({
+                    model: 'llama-3.3-70b-versatile',
+                    messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...chatMessages]
+                  })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data?.error?.message || `Groq HTTP ${res.status}`);
+                return data?.choices?.[0]?.message?.content;
+              }
+
+              const geminiContents = chatMessages.map(m => ({
+                role: m.role === 'assistant' ? 'model' : 'user',
+                parts: [{ text: m.content }]
+              }));
+              const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${encodeURIComponent(apiKey)}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+                  contents: geminiContents
+                })
+              });
+              const data = await res.json();
+              if (!res.ok) throw new Error(data?.error?.message || `Gemini HTTP ${res.status}`);
+              return data?.candidates?.[0]?.content?.parts?.[0]?.text;
+            }
+
             async function send() {
               const input = document.getElementById('prompt');
               const text = input.value.trim();
               if (!text) return;
 
-              const apiKey = localStorage.getItem('alter_key');
+              const apiKey = (localStorage.getItem('alter_key') || '').replace(/\s+/g, '');
               if (!apiKey) { openModal(); return; }
 
               addMsg(text, 'user');
               input.value = '';
-              history.push({ role: "user", parts: [{ text }] });
+              chatMessages.push({ role: 'user', content: text });
               setStatus('PROCESSING...', true);
 
               try {
-                const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${encodeURIComponent(apiKey)}`, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-                    contents: history
-                  })
-                });
-                const data = await res.json();
-                if (!res.ok) {
-                  const errMsg = data?.error?.message || `HTTP ${res.status}`;
-                  addMsg(`Uplink Error: ${errMsg}`, 'err');
-                  setStatus('LINK ERROR', false);
-                  history.pop();
-                  return;
-                }
-                let reply = data?.candidates?.[0]?.content?.parts?.[0]?.text || "No signal.";
-                history.push({ role: "model", parts: [{ text: reply }] });
+                let reply = await callAI(apiKey);
+                if (!reply) reply = "No signal received.";
+                chatMessages.push({ role: 'assistant', content: reply });
 
                 const updateMatch = reply.match(/<SELF_UPDATE>([\s\S]*?)<\/SELF_UPDATE>/);
                 if (updateMatch) {
@@ -358,9 +425,9 @@ jobs:
                   setTimeout(() => setStatus('NEURAL LINK READY', false), 2500);
                 }
               } catch (e) {
-                addMsg(`Network Error: ${e.message}. Check VPN/Internet.`, 'err');
-                setStatus('OFFLINE', false);
-                history.pop();
+                addMsg(`Uplink Error: ${e.message}`, 'err');
+                setStatus('LINK ERROR', false);
+                chatMessages.pop();
               }
             }
 
