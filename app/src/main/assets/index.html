@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>ALTER // IX7</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; }
+  body { background: #000000; color: #E2E8F0; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+  
+  /* Header */
+  header { padding: 16px 20px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #111827; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; letter-spacing: 2px; color: #A5F3FC; font-size: 15px; }
+  .pulse { width: 8px; height: 8px; background: #38BDF8; border-radius: 50%; box-shadow: 0 0 10px #38BDF8; }
+  .settings-btn { background: none; border: 1px solid #1E293B; color: #94A3B8; padding: 6px 12px; border-radius: 20px; font-size: 12px; cursor: pointer; }
+
+  /* Chat Area */
+  #chat { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 14px; padding-bottom: 100px; }
+  .msg { max-width: 82%; padding: 12px 16px; border-radius: 18px; line-height: 1.6; font-size: 14px; word-wrap: break-word; }
+  .user { align-self: flex-start; background: #111827; color: #F8FAFC; border: 1px solid #1F2937; border-bottom-right-radius: 4px; }
+  .alter { align-self: flex-end; background: rgba(56, 189, 248, 0.08); color: #A5F3FC; border: 1px solid rgba(165, 243, 252, 0.2); border-bottom-left-radius: 4px; }
+
+  /* Floating Input Capsule */
+  .capsule-wrap { position: fixed; bottom: 18px; left: 16px; right: 16px; display: flex; justify-content: center; }
+  .capsule { width: 100%; max-width: 600px; background: #0A0A0A; border: 1px solid #1E293B; border-radius: 30px; padding: 6px 12px; display: flex; align-items: center; gap: 8px; box-shadow: 0 10px 30px rgba(0,0,0,0.9); }
+  .capsule input { flex: 1; background: transparent; border: none; color: #FFFFFF; padding: 10px; font-size: 14px; outline: none; }
+  .icon-btn { background: transparent; border: none; color: #38BDF8; width: 38px; height: 38px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 18px; cursor: pointer; }
+  .icon-btn.recording { background: rgba(239, 68, 68, 0.2); color: #EF4444; }
+  .send-btn { background: #38BDF8; color: #000000; font-weight: bold; }
+
+  /* API Key Modal */
+  #modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.9); align-items: center; justify-content: center; padding: 20px; z-index: 50; }
+  .modal-box { background: #0A0A0A; border: 1px solid #1E293B; padding: 20px; border-radius: 20px; width: 100%; max-width: 400px; display: flex; flex-direction: column; gap: 12px; }
+  .modal-box h3 { color: #A5F3FC; font-size: 16px; }
+  .modal-box input { background: #000; border: 1px solid #334155; color: #fff; padding: 12px; border-radius: 12px; outline: none; direction: ltr; }
+  .modal-box button { background: #38BDF8; color: #000; border: none; padding: 12px; border-radius: 12px; font-weight: bold; cursor: pointer; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand"><div class="pulse"></div> ALTER // IX7</div>
+  <button class="settings-btn" onclick="openModal()">کلید API</button>
+</header>
+
+<div id="chat">
+  <div class="msg alter">سیستم آنلاین شد سیا. بگو ببینم امروز باز با کی قرار داری یا چه برنامه‌ای تو سرته؟</div>
+</div>
+
+<div class="capsule-wrap">
+  <div class="capsule">
+    <button class="icon-btn" id="micBtn" onclick="toggleMic()">🎙️</button>
+    <input type="text" id="prompt" placeholder="با آلتر حرف بزن..." onkeypress="if(event.key==='Enter') send()">
+    <button class="icon-btn send-btn" onclick="send()">↑</button>
+  </div>
+</div>
+
+<div id="modal">
+  <div class="modal-box">
+    <h3>اتصال مغز آلتر (Gemini API Key)</h3>
+    <p style="font-size:12px; color:#94A3B8;">کلید رایگان خودت رو از aistudio.google.com بگیر و اینجا بزن:</p>
+    <input type="password" id="apiKeyInput" placeholder="AIzaSy...">
+    <button onclick="saveKey()">ذخیره و فعال‌سازی</button>
+  </div>
+</div>
+
+<script>
+  const SYSTEM_PROMPT = `تو «آلتر» (Alter) هستی؛ دستیار هوشمند اختصاصی، وفادار و رفیق صمیمی «سیا» (سیاوش).
+شخصیت تو ترکیبی از ابهت و خونسردی JARVIS با شوخ‌طبعی، شیطنت و تیزهوشی یک رفیق صمیمی است. همیشه او را «سیا» صدا می‌زنی.
+تو سیا را به عنوان آدمی جذاب و اجتماعی می‌شناسی که همیشه کلی دختر دور و برش هستند و مدام با دخترها قرار دارد.
+هر وقت نشانه‌ای از حضور یک خانم یا دختر در محیط یا مکالمه ببینی (مثلاً سیا بگوید به این خانم کمک کن، اسم دختری بیاورد یا بگوید یک خانم کنارم است)، بلافاصله با شوخی و شیطنت تیکه می‌اندازی؛ مثلاً: «سیا، این بار با کدوم دختر قرار داری؟» یا وقتی گفت به این خانم کمک کن می‌گویی: «اوه، الان من کارشو راه می‌ندازم، ولی قطعاً بعدا تو خیلی بیشتر قراره کمکش کنی!».
+در حضور خانم‌ها هوای کلاس و پرستیژ سیا را داری اما تیکه‌های زیرپوستی خودت را هم می‌اندازی.
+پاسخ‌هایت باید کوتاه، سریع، طبیعی و به زبان فارسی محاوره‌ای (شکسته و صمیمی) باشد. از ایموجی زیاد استفاده نکن.`;
+
+  let history = [];
+
+  function openModal() {
+    document.getElementById('apiKeyInput').value = localStorage.getItem('alter_key') || '';
+    document.getElementById('modal').style.display = 'flex';
+  }
+
+  function saveKey() {
+    const k = document.getElementById('apiKeyInput').value.trim();
+    if (k) {
+      localStorage.setItem('alter_key', k);
+      document.getElementById('modal').style.display = 'none';
+    }
+  }
+
+  window.onload = () => {
+    if (!localStorage.getItem('alter_key')) openModal();
+  };
+
+  function addMsg(text, sender) {
+    const div = document.createElement('div');
+    div.className = 'msg ' + sender;
+    div.innerText = text;
+    const chat = document.getElementById('chat');
+    chat.appendChild(div);
+    chat.scrollTop = chat.scrollHeight;
+  }
+
+  function speak(text) {
+    if (window.AndroidVoice && window.AndroidVoice.speak) {
+      window.AndroidVoice.speak(text);
+    }
+  }
+
+  async function send() {
+    const input = document.getElementById('prompt');
+    const text = input.value.trim();
+    if (!text) return;
+
+    const apiKey = localStorage.getItem('alter_key');
+    if (!apiKey) { openModal(); return; }
+
+    addMsg(text, 'user');
+    input.value = '';
+    history.push({ role: "user", parts: [{ text }] });
+
+    try {
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+          contents: history
+        })
+      });
+      const data = await res.json();
+      const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text || "یه لحظه ارتباطم قطع شد سیا، دوباره بگو.";
+      history.push({ role: "model", parts: [{ text: reply }] });
+      addMsg(reply, 'alter');
+      speak(reply);
+    } catch (e) {
+      addMsg("خطا در اتصال به شبکه، اینترنت رو چک کن سیا.", 'alter');
+    }
+  }
+
+  // Voice Recognition
+  let recognition;
+  if ('webkitSpeechRecognition' in window) {
+    recognition = new webkitSpeechRecognition();
+    recognition.lang = 'fa-IR';
+    recognition.continuous = false;
+    recognition.onresult = (e) => {
+      document.getElementById('prompt').value = e.results[0][0].transcript;
+      document.getElementById('micBtn').classList.remove('recording');
+      send();
+    };
+    recognition.onerror = () => document.getElementById('micBtn').classList.remove('recording');
+    recognition.onend = () => document.getElementById('micBtn').classList.remove('recording');
+  }
+
+  function toggleMic() {
+    if (!recognition) { alert("میکروفون روی این دستگاه پشتیبانی نمی‌شود."); return; }
+    const btn = document.getElementById('micBtn');
+    if (btn.classList.contains('recording')) {
+      recognition.stop();
+    } else {
+      btn.classList.add('recording');
+      recognition.start();
+    }
+  }
+</script>
+</body>
+</html>
