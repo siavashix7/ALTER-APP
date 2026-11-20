@@ -1,8 +1,8 @@
-name: Build & Release APK
+name: Build & Release Alter OTA
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main ]
   workflow_dispatch:
 
 permissions:
@@ -11,41 +11,884 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup JDK 17
+      - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
           java-version: '17'
-          cache: gradle
+          distribution: 'temurin'
 
-      - name: Make gradlew executable
-        run: chmod +x ./gradlew
-
-      - name: Build Debug APK
-        run: ./gradlew assembleDebug --no-daemon
-
-      - name: Locate APK
-        id: apk
+      - name: Build Alter OTA Core
         run: |
-          APK=$(find app/build/outputs/apk/debug -name "*.apk" | head -n 1)
-          echo "Found APK: $APK"
-          echo "path=$APK" >> $GITHUB_OUTPUT
+          mkdir -p app/src/main/java/com/ix7/alter
+          mkdir -p app/src/main/assets
+          mkdir -p app/src/main/res/drawable
+          mkdir -p app/src/main/res/xml
 
-      - name: Compute release tag
-        id: tag
-        run: echo "name=ALTER-$(date +'%Y%m%d-%H%M')-${{ github.run_number }}" >> $GITHUB_OUTPUT
+          cat << 'EOF' > app/src/main/res/drawable/ic_launcher.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp"
+              android:height="108dp"
+              android:viewportWidth="108"
+              android:viewportHeight="108">
+              <path android:fillColor="#000000" android:pathData="M0,0h108v108h-108z" />
+              <path android:strokeColor="#38BDF8" android:strokeWidth="2.5" android:fillColor="#00000000" android:pathData="M54,20 A34,34 0 1,1 53.9,20 Z" />
+              <path android:strokeColor="#A5F3FC" android:strokeWidth="1.5" android:fillColor="#08121E" android:pathData="M54,30 A24,24 0 1,1 53.9,30 Z" />
+              <path android:fillColor="#38BDF8" android:pathData="M54,36 L67,68 L61.5,68 L58.5,60.5 L49.5,60.5 L46.5,68 L41,68 Z M54,44.5 L51,55.5 L57,55.5 Z" />
+          </vector>
+          EOF
 
-      - name: Publish GitHub Release (APK directly, no zip)
+          cat << 'EOF' > app/src/main/res/xml/file_paths.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <paths>
+              <cache-path name="apk_cache" path="." />
+              <external-cache-path name="ext_apk_cache" path="." />
+          </paths>
+          EOF
+
+          cat << 'EOF' > app/src/main/AndroidManifest.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.RECORD_AUDIO" />
+              <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+              <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+              <application
+                  android:allowBackup="true"
+                  android:icon="@drawable/ic_launcher"
+                  android:roundIcon="@drawable/ic_launcher"
+                  android:label="ALTER"
+                  android:supportsRtl="true"
+                  android:theme="@style/Theme.AppCompat.NoActionBar">
+                  <provider
+                      android:name="androidx.core.content.FileProvider"
+                      android:authorities="${applicationId}.provider"
+                      android:exported="false"
+                      android:grantUriPermissions="true">
+                      <meta-data
+                          android:name="android.support.FILE_PROVIDER_PATHS"
+                          android:resource="@xml/file_paths" />
+                  </provider>
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:windowSoftInputMode="adjustResize">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          cat << 'EOF' > app/src/main/java/com/ix7/alter/MainActivity.java
+          package com.ix7.alter;
+
+          import android.Manifest;
+          import android.content.Intent;
+          import android.content.pm.PackageManager;
+          import android.graphics.Color;
+          import android.net.Uri;
+          import android.os.Build;
+          import android.os.Bundle;
+          import android.provider.Settings;
+          import android.speech.tts.TextToSpeech;
+          import android.speech.tts.UtteranceProgressListener;
+          import android.speech.tts.Voice;
+          import android.view.Window;
+          import android.webkit.JavascriptInterface;
+          import android.webkit.PermissionRequest;
+          import android.webkit.WebChromeClient;
+          import android.webkit.WebSettings;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+          import androidx.appcompat.app.AppCompatActivity;
+          import androidx.core.app.ActivityCompat;
+          import androidx.core.content.ContextCompat;
+          import androidx.core.content.FileProvider;
+          import java.io.File;
+          import java.io.FileOutputStream;
+          import java.io.InputStream;
+          import java.net.HttpURLConnection;
+          import java.net.URL;
+          import java.util.Locale;
+          import java.util.Set;
+          import org.json.JSONArray;
+          import org.json.JSONObject;
+
+          public class MainActivity extends AppCompatActivity {
+              private WebView webView;
+              private TextToSpeech tts;
+              private boolean isMuted = false;
+
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  Window window = getWindow();
+                  window.setStatusBarColor(Color.BLACK);
+                  window.setNavigationBarColor(Color.BLACK);
+
+                  if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                      ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.RECORD_AUDIO}, 1);
+                  }
+
+                  tts = new TextToSpeech(this, status -> {
+                      if (status == TextToSpeech.SUCCESS) {
+                          tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
+                              @Override public void onStart(String utteranceId) {
+                                  runOnUiThread(() -> webView.evaluateJavascript("setOrbMode('speaking')", null));
+                              }
+                              @Override public void onDone(String utteranceId) {
+                                  runOnUiThread(() -> webView.evaluateJavascript("setOrbMode('idle')", null));
+                              }
+                              @Override public void onError(String utteranceId) {
+                                  runOnUiThread(() -> webView.evaluateJavascript("setOrbMode('idle')", null));
+                              }
+                          });
+                      }
+                  });
+
+                  webView = new WebView(this);
+                  webView.setBackgroundColor(Color.BLACK);
+                  setContentView(webView);
+
+                  WebSettings settings = webView.getSettings();
+                  settings.setJavaScriptEnabled(true);
+                  settings.setDomStorageEnabled(true);
+                  settings.setMediaPlaybackRequiresUserGesture(false);
+
+                  webView.addJavascriptInterface(new Object() {
+                      @JavascriptInterface
+                      public void speak(String rawText) {
+                          if (tts == null || isMuted) return;
+                          String clean = rawText.replaceAll("[\\p{So}\\p{Cn}*#_`~]", "").trim();
+                          if (clean.isEmpty()) return;
+
+                          boolean isPersian = clean.matches(".*[\\u0600-\\u06FF]+.*");
+                          if (isPersian) {
+                              tts.setLanguage(new Locale("fa", "IR"));
+                              tts.setPitch(0.55f);
+                              tts.setSpeechRate(0.95f);
+                          } else {
+                              tts.setLanguage(Locale.UK);
+                              selectDeepMaleVoice();
+                              tts.setPitch(0.65f);
+                              tts.setSpeechRate(0.93f);
+                          }
+                          tts.speak(clean, TextToSpeech.QUEUE_FLUSH, new Bundle(), "ALTER_UTT");
+                      }
+
+                      @JavascriptInterface
+                      public void stopSpeaking() {
+                          if (tts != null) tts.stop();
+                          runOnUiThread(() -> webView.evaluateJavascript("setOrbMode('idle')", null));
+                      }
+
+                      @JavascriptInterface
+                      public void setMute(boolean mute) {
+                          isMuted = mute;
+                          if (mute && tts != null) tts.stop();
+                      }
+
+                      @JavascriptInterface
+                      public void downloadAndInstallOta(String ghToken) {
+                          new Thread(() -> {
+                              try {
+                                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !getPackageManager().canRequestPackageInstalls()) {
+                                      runOnUiThread(() -> {
+                                          webView.evaluateJavascript("onOtaStatus('دسترسی نصب از منابع ناشناس را فعال کنید و دوباره دکمه INSTALL OTA را بزنید.')", null);
+                                          Intent intent = new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + getPackageName()));
+                                          startActivity(intent);
+                                      });
+                                      return;
+                                  }
+
+                                  runOnUiThread(() -> webView.evaluateJavascript("onOtaStatus('در حال دریافت اطلاعات نسخه جدید از گیت‌هاب...')", null));
+
+                                  URL apiUrl = new URL("https://api.github.com/repos/siavashix7/ALTER-APP/releases/tags/latest");
+                                  HttpURLConnection conn = (HttpURLConnection) apiUrl.openConnection();
+                                  conn.setRequestProperty("Accept", "application/vnd.github+json");
+                                  if (ghToken != null && !ghToken.isEmpty()) {
+                                      conn.setRequestProperty("Authorization", "Bearer " + ghToken);
+                                  }
+
+                                  InputStream is = conn.getInputStream();
+                                  String jsonStr = new String(is.readAllBytes());
+                                  is.close();
+
+                                  JSONObject release = new JSONObject(jsonStr);
+                                  JSONArray assets = release.getJSONArray("assets");
+                                  String assetApiUrl = null;
+                                  for (int i = 0; i < assets.length(); i++) {
+                                      JSONObject asset = assets.getJSONObject(i);
+                                      if (asset.getString("name").endsWith(".apk")) {
+                                          assetApiUrl = asset.getString("url");
+                                          break;
+                                      }
+                                  }
+
+                                  if (assetApiUrl == null) {
+                                      runOnUiThread(() -> webView.evaluateJavascript("onOtaStatus('فایل APK در Release یافت نشد. چند لحظه صبر کنید.')", null));
+                                      return;
+                                  }
+
+                                  runOnUiThread(() -> webView.evaluateJavascript("onOtaStatus('در حال دانلود مستقیم فایل نصب (APK)...')", null));
+
+                                  URL dlUrl = new URL(assetApiUrl);
+                                  HttpURLConnection dlConn = (HttpURLConnection) dlUrl.openConnection();
+                                  dlConn.setRequestProperty("Accept", "application/octet-stream");
+                                  if (ghToken != null && !ghToken.isEmpty()) {
+                                      dlConn.setRequestProperty("Authorization", "Bearer " + ghToken);
+                                  }
+                                  dlConn.setInstanceFollowRedirects(true);
+
+                                  File apkFile = new File(getCacheDir(), "alter-ota-update.apk");
+                                  if (apkFile.exists()) apkFile.delete();
+
+                                  InputStream dlIn = dlConn.getInputStream();
+                                  FileOutputStream fos = new FileOutputStream(apkFile);
+                                  byte[] buffer = new byte[8192];
+                                  int len;
+                                  while ((len = dlIn.read(buffer)) != -1) {
+                                      fos.write(buffer, 0, len);
+                                  }
+                                  fos.close();
+                                  dlIn.close();
+
+                                  runOnUiThread(() -> {
+                                      webView.evaluateJavascript("onOtaStatus('دانلود کامل شد! پنجره نصب اندروید باز می‌شود...')", null);
+                                      Uri apkUri = FileProvider.getUriForFile(MainActivity.this, getPackageName() + ".provider", apkFile);
+                                      Intent installIntent = new Intent(Intent.ACTION_VIEW);
+                                      installIntent.setDataAndType(apkUri, "application/vnd.android.package-archive");
+                                      installIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+                                      startActivity(installIntent);
+                                  });
+
+                              } catch (Exception e) {
+                                  String errMsg = e.getMessage() != null ? e.getMessage().replace("'", "") : "Unknown error";
+                                  runOnUiThread(() -> webView.evaluateJavascript("onOtaStatus('خطای OTA: " + errMsg + "')", null));
+                              }
+                          }).start();
+                      }
+                  }, "AndroidVoice");
+
+                  webView.setWebViewClient(new WebViewClient());
+                  webView.setWebChromeClient(new WebChromeClient() {
+                      @Override
+                      public void onPermissionRequest(final PermissionRequest request) {
+                          request.grant(request.getResources());
+                      }
+                  });
+
+                  webView.loadUrl("file:///android_asset/index.html");
+              }
+
+              private void selectDeepMaleVoice() {
+                  try {
+                      Set<Voice> voices = tts.getVoices();
+                      if (voices == null) return;
+                      for (Voice v : voices) {
+                          String name = v.getName().toLowerCase();
+                          if (v.getLocale().getLanguage().equals("en") && (name.contains("male") || name.contains("en-gb-x-gbd") || name.contains("en-us-x-tpd") || name.contains("en-us-x-iol"))) {
+                              tts.setVoice(v);
+                              return;
+                          }
+                      }
+                  } catch (Exception ignored) {}
+              }
+
+              @Override
+              protected void onDestroy() {
+                  if (tts != null) {
+                      tts.stop();
+                      tts.shutdown();
+                  }
+                  super.onDestroy();
+              }
+          }
+          EOF
+
+          cat << 'EOF' > app/src/main/assets/index.html
+          <!DOCTYPE html>
+          <html lang="fa" dir="rtl">
+          <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+          <title>ALTER // IX7 OTA</title>
+          <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800&family=Vazirmatn:wght@300;400;600;700&display=swap" rel="stylesheet">
+          <style>
+            :root { --bg: #000000; --cyan: #38BDF8; --ice: #A5F3FC; --glass: rgba(6, 14, 24, 0.76); }
+            * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+            body {
+              background: var(--bg); color: #E2E8F0; font-family: 'Vazirmatn', system-ui, sans-serif;
+              height: 100vh; display: flex; flex-direction: column; overflow: hidden; position: relative;
+            }
+            .bg-grid {
+              position: fixed; inset: 0;
+              background-image: linear-gradient(rgba(56, 189, 248, 0.04) 1px, transparent 1px), linear-gradient(90deg, rgba(56, 189, 248, 0.04) 1px, transparent 1px);
+              background-size: 32px 32px; mask-image: radial-gradient(circle at 50% 28%, black 20%, transparent 78%);
+              pointer-events: none; z-index: 0;
+            }
+            .corner-frame { position: fixed; width: 18px; height: 18px; border-color: rgba(56, 189, 248, 0.35); border-style: solid; pointer-events: none; z-index: 20; }
+            .tl { top: 8px; left: 8px; border-width: 1.5px 0 0 1.5px; }
+            .tr { top: 8px; right: 8px; border-width: 1.5px 1.5px 0 0; }
+            .bl { bottom: 8px; left: 8px; border-width: 0 0 1.5px 1.5px; }
+            .br { bottom: 8px; right: 8px; border-width: 0 1.5px 1.5px 0; }
+
+            header {
+              direction: ltr; padding: 14px 18px; display: flex; justify-content: space-between; align-items: center;
+              border-bottom: 1px solid rgba(56, 189, 248, 0.14); background: rgba(0, 0, 0, 0.78); backdrop-filter: blur(12px); z-index: 10;
+            }
+            .brand { font-family: 'Orbitron', sans-serif; display: flex; align-items: center; gap: 9px; font-weight: 800; letter-spacing: 2.5px; color: var(--ice); font-size: 12px; text-shadow: 0 0 12px rgba(56, 189, 248, 0.5); }
+            .pulse-dot { width: 8px; height: 8px; background: var(--cyan); border-radius: 50%; box-shadow: 0 0 14px var(--cyan); animation: pulse 1.8s infinite; }
+            @keyframes pulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(0.6); opacity: 0.4; } }
+
+            .hud-controls { display: flex; gap: 6px; }
+            .hud-btn {
+              font-family: 'Orbitron', sans-serif; background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.3);
+              color: var(--ice); padding: 6px 10px; border-radius: 6px; font-size: 8.5px; letter-spacing: 1px; cursor: pointer; transition: 0.2s;
+            }
+            .hud-btn:active { background: rgba(56, 189, 248, 0.25); transform: scale(0.95); }
+            .hud-btn.muted { border-color: rgba(239, 68, 68, 0.5); color: #FCA5A5; background: rgba(239, 68, 68, 0.12); }
+            .hud-btn.ota-ready { border-color: #10B981; color: #6EE7B7; background: rgba(16, 185, 129, 0.18); box-shadow: 0 0 12px rgba(16, 185, 129, 0.4); }
+
+            .core-stage { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 4px 0 6px; z-index: 5; }
+            #coreCanvas { width: 180px; height: 180px; cursor: pointer; }
+            .telemetry { direction: ltr; display: flex; gap: 10px; font-family: 'Orbitron', sans-serif; font-size: 8.5px; letter-spacing: 1.6px; color: var(--cyan); margin-top: -10px; }
+            .telemetry span { background: rgba(56, 189, 248, 0.06); padding: 4px 10px; border-radius: 4px; border: 1px solid rgba(56, 189, 248, 0.2); }
+
+            #chat { flex: 1; overflow-y: auto; padding: 14px 18px 125px; display: flex; flex-direction: column; gap: 14px; z-index: 5; scroll-behavior: smooth; }
+            #chat::-webkit-scrollbar { width: 0; }
+            .msg { max-width: 86%; padding: 13px 17px; line-height: 1.8; font-size: 14.5px; word-wrap: break-word; direction: auto; animation: slideUp 0.28s cubic-bezier(0.16, 1, 0.3, 1); }
+            @keyframes slideUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+            .user { align-self: flex-start; background: linear-gradient(135deg, rgba(15, 23, 42, 0.9), rgba(9, 13, 22, 0.95)); color: #F8FAFC; border: 1px solid rgba(148, 163, 184, 0.2); border-radius: 18px 18px 18px 4px; }
+            .alter { align-self: flex-end; background: var(--glass); backdrop-filter: blur(10px); color: #E0F2FE; border: 1px solid rgba(56, 189, 248, 0.28); border-right: 3px solid var(--cyan); border-radius: 18px 18px 4px 18px; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.6); }
+            .alter-tag { font-family: 'Orbitron', sans-serif; font-size: 8px; letter-spacing: 2px; color: var(--cyan); opacity: 0.75; margin-bottom: 4px; display: block; text-align: left; }
+            .sys { align-self: center; background: rgba(16, 185, 129, 0.12); color: #6EE7B7; border: 1px solid rgba(16, 185, 129, 0.35); border-radius: 10px; font-size: 12px; text-align: center; }
+            .err { align-self: center; background: rgba(239, 68, 68, 0.12); color: #FCA5A5; border: 1px solid rgba(239, 68, 68, 0.35); border-radius: 10px; font-size: 12px; text-align: center; }
+
+            .bottom-dock { position: fixed; bottom: 0; left: 0; right: 0; padding: 10px 16px 20px; background: linear-gradient(to top, #000000 78%, transparent); display: flex; flex-direction: column; align-items: center; gap: 10px; z-index: 15; }
+            .chips { display: flex; gap: 8px; overflow-x: auto; width: 100%; max-width: 600px; }
+            .chips::-webkit-scrollbar { display: none; }
+            .chip { white-space: nowrap; background: rgba(8, 18, 30, 0.85); border: 1px solid rgba(56, 189, 248, 0.25); color: var(--ice); font-size: 11.5px; padding: 6px 14px; border-radius: 20px; cursor: pointer; }
+            .capsule { direction: ltr; width: 100%; max-width: 600px; background: rgba(8, 13, 22, 0.95); backdrop-filter: blur(18px); border: 1px solid rgba(56, 189, 248, 0.35); border-radius: 32px; padding: 6px 8px; display: flex; align-items: center; gap: 6px; box-shadow: 0 0 30px rgba(56, 189, 248, 0.15); }
+            .capsule input { flex: 1; background: transparent; border: none; color: #FFFFFF; font-family: 'Vazirmatn', sans-serif; padding: 10px 10px; font-size: 14px; outline: none; direction: auto; }
+            .capsule input::placeholder { color: #475569; }
+            .btn { background: transparent; border: none; color: var(--cyan); width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+            .btn.rec { background: rgba(239, 68, 68, 0.25); color: #EF4444; box-shadow: 0 0 18px rgba(239, 68, 68, 0.5); }
+            .send { background: linear-gradient(135deg, #38BDF8, #0284C7); color: #000000; }
+
+            #modal { direction: ltr; display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, 0.94); backdrop-filter: blur(8px); align-items: center; justify-content: center; padding: 20px; z-index: 50; }
+            .modal-box { background: #050810; border: 1px solid rgba(56, 189, 248, 0.35); padding: 24px; border-radius: 20px; width: 100%; max-width: 390px; display: flex; flex-direction: column; gap: 12px; }
+            .modal-box h3 { font-family: 'Orbitron', sans-serif; color: var(--ice); font-size: 13px; letter-spacing: 2px; }
+            .modal-box label { font-size: 11px; color: #94A3B8; }
+            .modal-box input, .modal-box select { background: #000; border: 1px solid #1E293B; color: var(--cyan); padding: 12px; border-radius: 10px; outline: none; font-family: monospace; font-size: 12px; }
+            .modal-box button { font-family: 'Orbitron', sans-serif; background: var(--cyan); color: #000; border: none; padding: 13px; border-radius: 10px; font-weight: 800; font-size: 11px; letter-spacing: 1.5px; cursor: pointer; margin-top: 6px; }
+          </style>
+          </head>
+          <body>
+
+          <div class="bg-grid"></div>
+          <div class="corner-frame tl"></div>
+          <div class="corner-frame tr"></div>
+          <div class="corner-frame bl"></div>
+          <div class="corner-frame br"></div>
+
+          <header>
+            <div class="brand"><div class="pulse-dot"></div> ALTER // OTA</div>
+            <div class="hud-controls">
+              <button class="hud-btn" id="otaBtn" onclick="triggerManualOta()">OTA</button>
+              <button class="hud-btn" id="muteBtn" onclick="toggleMute()">VOICE</button>
+              <button class="hud-btn" onclick="openModal()">UPLINK</button>
+            </div>
+          </header>
+
+          <div class="core-stage">
+            <canvas id="coreCanvas" width="360" height="360" onclick="stopSpeech()"></canvas>
+            <div class="telemetry">
+              <span id="statusTxt">SYSTEMS NOMINAL</span>
+              <span id="modelTag">OTA AUTO-CORE</span>
+            </div>
+          </div>
+
+          <div id="chat">
+            <div class="msg alter">
+              <span class="alter-tag">ALTER // OTA ENGINE</span>
+              هسته هولوگرافیک و سیستم نصب خودکار (OTA) فعال شد سیا. از این به بعد هر آپدیتی که بدی، خودم دانلودش می‌کنم و پنجره نصب رو برات باز می‌کنم.
+            </div>
+          </div>
+
+          <div class="bottom-dock">
+            <div class="chips">
+              <div class="chip" onclick="quickSend('من کیم و رابطمون چیه؟')">هویت من</div>
+              <div class="chip" onclick="triggerManualOta()">نصب آخرین نسخه (OTA)</div>
+              <div class="chip" onclick="quickSend('Introduce yourself in English with your deep voice')">تست صدای انگلیسی</div>
+            </div>
+            <div class="capsule">
+              <button class="btn" id="micBtn" onclick="toggleMic()">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg>
+              </button>
+              <input type="text" id="prompt" placeholder="دستور بده سیا..." onkeypress="if(event.key==='Enter') send()">
+              <button class="btn send" onclick="send()">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <div id="modal">
+            <div class="modal-box">
+              <h3>NEURAL & OTA UPLINK</h3>
+              <label>1. OPENROUTER / AI KEY</label>
+              <input type="text" id="apiKeyInput" placeholder="sk-or-v1-...">
+              <label>2. PERSIAN & REASONING ENGINE</label>
+              <select id="modelSelect">
+                <option value="auto">Auto-Best (Qwen 235B / DeepSeek V3 / Gemini)</option>
+                <option value="qwen/qwen3-235b-a22b:free">Qwen 3 235B (Best Persian)</option>
+                <option value="deepseek/deepseek-chat-v3-0324:free">DeepSeek V3 (Natural Chat)</option>
+                <option value="google/gemini-2.0-flash-exp:free">Gemini 2.0 Flash</option>
+              </select>
+              <label>3. GITHUB TOKEN (Required for Self-Update & OTA)</label>
+              <input type="text" id="ghTokenInput" placeholder="ghp_...">
+              <button onclick="saveKeys()">ACTIVATE OTA CORE</button>
+            </div>
+          </div>
+
+          <script>
+            const canvas = document.getElementById('coreCanvas');
+            const ctx = canvas.getContext('2d');
+            let orbMode = 'idle';
+            let tick = 0;
+
+            function setOrbMode(mode) {
+              orbMode = mode;
+              const st = document.getElementById('statusTxt');
+              if (mode === 'thinking') st.innerText = 'NEURAL PROCESSING...';
+              else if (mode === 'speaking') st.innerText = 'AUDIO STREAMING';
+              else if (mode === 'listening') st.innerText = 'VOICE CAPTURE...';
+              else st.innerText = 'SYSTEMS NOMINAL';
+            }
+
+            function renderOrb() {
+              ctx.clearRect(0, 0, 360, 360);
+              const cx = 180, cy = 180;
+              tick += (orbMode === 'thinking') ? 0.09 : (orbMode === 'speaking') ? 0.065 : 0.022;
+
+              const amp = (orbMode === 'speaking') ? 16 * Math.abs(Math.sin(tick * 2.8)) :
+                          (orbMode === 'listening') ? 12 * Math.abs(Math.sin(tick * 2.2)) :
+                          (orbMode === 'thinking') ? 7 : 3 * Math.sin(tick);
+
+              ctx.save();
+              ctx.translate(cx, cy);
+              ctx.rotate(tick * 0.25);
+              for (let i = 0; i < 36; i++) {
+                ctx.rotate((Math.PI * 2) / 36);
+                ctx.strokeStyle = i % 3 === 0 ? 'rgba(56, 189, 248, 0.55)' : 'rgba(56, 189, 248, 0.18)';
+                ctx.lineWidth = i % 3 === 0 ? 2 : 1;
+                ctx.beginPath();
+                ctx.moveTo(124, 0);
+                ctx.lineTo(i % 3 === 0 ? 134 : 129, 0);
+                ctx.stroke();
+              }
+              ctx.restore();
+
+              ctx.save();
+              ctx.translate(cx, cy);
+              ctx.rotate(tick * 0.7);
+              ctx.strokeStyle = 'rgba(56, 189, 248, 0.45)';
+              ctx.lineWidth = 2.5;
+              ctx.setLineDash([36, 18, 10, 18]);
+              ctx.beginPath();
+              ctx.arc(0, 0, 106 + amp * 0.35, 0, Math.PI * 2);
+              ctx.stroke();
+              ctx.restore();
+
+              ctx.save();
+              ctx.translate(cx, cy);
+              ctx.rotate(-tick * 1.2);
+              ctx.strokeStyle = 'rgba(165, 243, 252, 0.65)';
+              ctx.lineWidth = 2;
+              ctx.setLineDash([50, 28]);
+              ctx.beginPath();
+              ctx.arc(0, 0, 80 + amp * 0.5, 0, Math.PI * 2);
+              ctx.stroke();
+              ctx.restore();
+
+              ctx.strokeStyle = (orbMode === 'listening') ? 'rgba(239, 68, 68, 0.9)' : 'rgba(56, 189, 248, 0.95)';
+              ctx.lineWidth = 2.2;
+              ctx.beginPath();
+              for (let i = 0; i <= 360; i += 3) {
+                const rad = i * Math.PI / 180;
+                const wave = (orbMode === 'speaking' || orbMode === 'listening')
+                  ? Math.sin(rad * 10 + tick * 7) * (amp * 0.65)
+                  : Math.sin(rad * 4 + tick * 2) * 2;
+                const r = 58 + amp + wave;
+                const x = cx + Math.cos(rad) * r;
+                const y = cy + Math.sin(rad) * r;
+                if (i === 0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+              }
+              ctx.closePath();
+              ctx.stroke();
+
+              const grad = ctx.createRadialGradient(cx, cy, 4, cx, cy, 56 + amp);
+              grad.addColorStop(0, 'rgba(165, 243, 252, 0.55)');
+              grad.addColorStop(0.55, 'rgba(56, 189, 248, 0.16)');
+              grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+              ctx.fillStyle = grad;
+              ctx.beginPath();
+              ctx.arc(cx, cy, 56 + amp, 0, Math.PI * 2);
+              ctx.fill();
+
+              requestAnimationFrame(renderOrb);
+            }
+            renderOrb();
+
+            const SYSTEM_PROMPT = `تو ALTER هستی؛ دستیار هوشمند اختصاصی، وفادار، باهوش و کاریزماتیک که توسط «سیا» (سیاوش / SIAVASHIX7) خلق شده است.
+          قوانین حیاتی شخصیت و زبان:
+          1. خالق و تنها کاربر تو «سیا» (سیاوش) است. اگر پرسید «من کیم؟»، با اطمینان و رفاقت بگو تو سیا هستی، خالق و معمار من. هرگز نگو نمی‌شناسمت یا هویت خودت را با او اشتباه نگیر.
+          2. لحن فارسی تو باید **کاملاً محاوره‌ای، تهرانیِ شیک، طبیعی و بدون هیچ‌گونه غلط دستوری یا ترجمه ماشینی** باشد.
+          3. هر وقت حس کردی یک خانم در جمع هست یا سیا درباره دختری صحبت می‌کند، یک تیکه ظریف، باکلاس و رفیقانه بینداز (مثلاً: «سیا، این دفعه کدوم دیته؟» یا «این بخشش با من، هرچند مطمئنم بعدش خودت قراره خیلی بیشتر بهش کمک کنی»).
+          4. پاسخ‌ها را کوتاه، کوبنده و خوش‌آهنگ بنویس. مطلقاً از ایموجی استفاده نکن.
+
+          پروتکل ارتقای خودکار (SELF-UPGRADE):
+          تو دسترسی مستقیم به فایل ".github/workflows/main.yml" در ریپازیتوری siavashix7/ALTER-APP داری.
+          فقط زمانی که سیا صراحتاً خواست کد یا ظاهر تو تغییر کند، کل محتوای سالم و کامل YAML (شامل بخش Release OTA و AndroidManifest و MainActivity و index.html) را در انتهای پاسخ داخل تگ <SELF_UPDATE>...</SELF_UPDATE> قرار بده.`;
+
+            let chatMessages = [];
+            let muted = false;
+
+            function toggleMute() {
+              muted = !muted;
+              const btn = document.getElementById('muteBtn');
+              btn.innerText = muted ? 'MUTED' : 'VOICE';
+              if (muted) btn.classList.add('muted');
+              else btn.classList.remove('muted');
+              if (window.AndroidVoice && window.AndroidVoice.setMute) window.AndroidVoice.setMute(muted);
+            }
+
+            function stopSpeech() {
+              if (window.AndroidVoice && window.AndroidVoice.stopSpeaking) window.AndroidVoice.stopSpeaking();
+            }
+
+            function openModal() {
+              document.getElementById('apiKeyInput').value = localStorage.getItem('alter_key') || '';
+              document.getElementById('ghTokenInput').value = localStorage.getItem('alter_gh') || '';
+              document.getElementById('modelSelect').value = localStorage.getItem('alter_model') || 'auto';
+              document.getElementById('modal').style.display = 'flex';
+            }
+
+            function saveKeys() {
+              const k = document.getElementById('apiKeyInput').value.replace(/\s+/g, '');
+              const gh = document.getElementById('ghTokenInput').value.replace(/\s+/g, '');
+              const mod = document.getElementById('modelSelect').value;
+              if (k) localStorage.setItem('alter_key', k);
+              if (gh) localStorage.setItem('alter_gh', gh);
+              localStorage.setItem('alter_model', mod);
+              document.getElementById('modal').style.display = 'none';
+            }
+
+            window.onload = () => {
+              if (!localStorage.getItem('alter_key')) openModal();
+            };
+
+            function typeWriterMsg(text, cls) {
+              const div = document.createElement('div');
+              div.className = 'msg ' + cls;
+              if (cls === 'alter') {
+                const tag = document.createElement('span');
+                tag.className = 'alter-tag';
+                tag.innerText = 'ALTER // IX7';
+                div.appendChild(tag);
+              }
+              const contentSpan = document.createElement('span');
+              div.appendChild(contentSpan);
+
+              const chat = document.getElementById('chat');
+              chat.appendChild(div);
+
+              if (cls !== 'alter') {
+                contentSpan.innerText = text;
+                chat.scrollTop = chat.scrollHeight;
+                return;
+              }
+
+              let i = 0;
+              function typeStep() {
+                if (i < text.length) {
+                  contentSpan.textContent += text.charAt(i);
+                  i++;
+                  chat.scrollTop = chat.scrollHeight;
+                  setTimeout(typeStep, 14);
+                }
+              }
+              typeStep();
+            }
+
+            function speak(text) {
+              if (!muted && window.AndroidVoice && window.AndroidVoice.speak) {
+                window.AndroidVoice.speak(text);
+              }
+            }
+
+            function onOtaStatus(msg) {
+              typeWriterMsg(msg, 'sys');
+            }
+
+            function triggerManualOta() {
+              const ghToken = localStorage.getItem('alter_gh') || '';
+              if (window.AndroidVoice && window.AndroidVoice.downloadAndInstallOta) {
+                window.AndroidVoice.downloadAndInstallOta(ghToken);
+              } else {
+                typeWriterMsg("موتور نصب OTA روی این نسخه فعال نیست.", "err");
+              }
+            }
+
+            async function pollBuildAndInstall(ghToken) {
+              const runsUrl = "https://api.github.com/repos/siavashix7/ALTER-APP/actions/runs?per_page=1";
+              let attempts = 0;
+              const maxAttempts = 24; // ~4 minutes
+
+              const timer = setInterval(async () => {
+                attempts++;
+                try {
+                  const res = await fetch(runsUrl, {
+                    headers: { "Authorization": `Bearer ${ghToken}`, "Accept": "application/vnd.github+json" }
+                  });
+                  const data = await res.json();
+                  const latestRun = data?.workflow_runs?.[0];
+                  if (latestRun) {
+                    document.getElementById('statusTxt').innerText = `BUILD: ${latestRun.status.toUpperCase()}`;
+                    if (latestRun.status === 'completed') {
+                      clearInterval(timer);
+                      setOrbMode('idle');
+                      if (latestRun.conclusion === 'success') {
+                        document.getElementById('otaBtn').classList.add('ota-ready');
+                        typeWriterMsg("بیلد جدید با موفقیت سبز شد! در حال شروع دانلود و باز کردن پنجره نصب...", "sys");
+                        triggerManualOta();
+                      } else {
+                        typeWriterMsg(`بیلد با وضعیت ${latestRun.conclusion} متوقف شد.`, "err");
+                      }
+                    }
+                  }
+                } catch (e) {}
+
+                if (attempts >= maxAttempts) {
+                  clearInterval(timer);
+                  setOrbMode('idle');
+                }
+              }, 10000);
+            }
+
+            async function pushSelfUpdate(newYaml) {
+              const ghToken = localStorage.getItem('alter_gh');
+              if (!ghToken) {
+                typeWriterMsg("توکن گیت‌هاب ثبت نشده سیا. توی بخش UPLINK واردش کن.", "err");
+                return;
+              }
+              setOrbMode('thinking');
+              const apiUrl = "https://api.github.com/repos/siavashix7/ALTER-APP/contents/.github/workflows/main.yml";
+              try {
+                const getRes = await fetch(apiUrl, {
+                  headers: { "Authorization": `Bearer ${ghToken}`, "Accept": "application/vnd.github+json" }
+                });
+                const fileData = await getRes.json();
+                if (!getRes.ok) throw new Error(fileData.message || "Failed to fetch repo");
+
+                const encoded = btoa(unescape(encodeURIComponent(newYaml.trim())));
+                const putRes = await fetch(apiUrl, {
+                  method: "PUT",
+                  headers: {
+                    "Authorization": `Bearer ${ghToken}`,
+                    "Accept": "application/vnd.github+json",
+                    "Content-Type": "application/json"
+                  },
+                  body: JSON.stringify({
+                    message: "Autonomous OTA Self-Update by Alter AI",
+                    content: encoded,
+                    sha: fileData.sha
+                  })
+                });
+                if (!putRes.ok) {
+                  const errData = await putRes.json();
+                  throw new Error(errData.message || "Push rejected");
+                }
+                typeWriterMsg("کد آپدیت ارسال شد! دارم وضعیت ساخت رو پایش می‌کنم تا به محض آماده شدن خودکار نصبش کنم...", "sys");
+                setTimeout(() => pollBuildAndInstall(ghToken), 6000);
+              } catch (err) {
+                typeWriterMsg(`خطای همگام‌سازی گیت‌هاب: ${err.message}`, "err");
+                setOrbMode('idle');
+              }
+            }
+
+            async function fetchOpenRouterModel(apiKey, modelId) {
+              const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                  'Authorization': `Bearer ${apiKey}`,
+                  'Content-Type': 'application/json',
+                  'HTTP-Referer': 'https://github.com/siavashix7/ALTER-APP',
+                  'X-Title': 'ALTER IX7'
+                },
+                body: JSON.stringify({
+                  model: modelId,
+                  temperature: 0.7,
+                  messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...chatMessages]
+                })
+              });
+              const data = await res.json();
+              if (!res.ok) throw new Error(data?.error?.message || `HTTP ${res.status}`);
+              return data?.choices?.[0]?.message?.content;
+            }
+
+            async function callAI(apiKey) {
+              if (apiKey.startsWith('sk-or-')) {
+                const pref = localStorage.getItem('alter_model') || 'auto';
+                const fallbackChain = pref === 'auto'
+                  ? [
+                      'qwen/qwen3-235b-a22b:free',
+                      'deepseek/deepseek-chat-v3-0324:free',
+                      'google/gemini-2.0-flash-exp:free',
+                      'qwen/qwen-2.5-72b-instruct:free',
+                      'openrouter/free'
+                    ]
+                  : [pref, 'qwen/qwen3-235b-a22b:free', 'deepseek/deepseek-chat-v3-0324:free', 'google/gemini-2.0-flash-exp:free'];
+
+                let lastErr;
+                for (const mod of fallbackChain) {
+                  try {
+                    document.getElementById('modelTag').innerText = mod.split('/')[1].split(':')[0].toUpperCase();
+                    const out = await fetchOpenRouterModel(apiKey, mod);
+                    if (out) return out;
+                  } catch (e) {
+                    lastErr = e;
+                  }
+                }
+                throw lastErr || new Error("سرورهای OpenRouter موقتاً شلوغ هستند");
+              }
+
+              if (apiKey.startsWith('gsk_')) {
+                const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+                  method: 'POST',
+                  headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    model: 'llama-3.3-70b-versatile',
+                    messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...chatMessages]
+                  })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data?.error?.message || `Groq HTTP ${res.status}`);
+                return data?.choices?.[0]?.message?.content;
+              }
+
+              const geminiContents = chatMessages.map(m => ({
+                role: m.role === 'assistant' ? 'model' : 'user',
+                parts: [{ text: m.content }]
+              }));
+              const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${encodeURIComponent(apiKey)}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+                  contents: geminiContents
+                })
+              });
+              const data = await res.json();
+              if (!res.ok) throw new Error(data?.error?.message || `Gemini HTTP ${res.status}`);
+              return data?.candidates?.[0]?.content?.parts?.[0]?.text;
+            }
+
+            function quickSend(txt) {
+              document.getElementById('prompt').value = txt;
+              send();
+            }
+
+            async function send() {
+              const input = document.getElementById('prompt');
+              const text = input.value.trim();
+              if (!text) return;
+
+              const apiKey = (localStorage.getItem('alter_key') || '').replace(/\s+/g, '');
+              if (!apiKey) { openModal(); return; }
+
+              typeWriterMsg(text, 'user');
+              input.value = '';
+              chatMessages.push({ role: 'user', content: text });
+              setOrbMode('thinking');
+
+              try {
+                let reply = await callAI(apiKey);
+                if (!reply) reply = "سیگنالی دریافت نشد.";
+                chatMessages.push({ role: 'assistant', content: reply });
+
+                const updateMatch = reply.match(/<SELF_UPDATE>([\s\S]*?)<\/SELF_UPDATE>/);
+                if (updateMatch) {
+                  const cleanReply = reply.replace(/<SELF_UPDATE>[\s\S]*?<\/SELF_UPDATE>/, '').trim();
+                  if (cleanReply) {
+                    typeWriterMsg(cleanReply, 'alter');
+                    speak(cleanReply);
+                  }
+                  await pushSelfUpdate(updateMatch[1]);
+                } else {
+                  typeWriterMsg(reply, 'alter');
+                  setOrbMode('idle');
+                  speak(reply);
+                }
+              } catch (e) {
+                typeWriterMsg(`خطای ارتباط: ${e.message}`, 'err');
+                setOrbMode('idle');
+                chatMessages.pop();
+              }
+            }
+
+            let recognition;
+            if ('webkitSpeechRecognition' in window) {
+              recognition = new webkitSpeechRecognition();
+              recognition.lang = 'fa-IR';
+              recognition.continuous = false;
+              recognition.onresult = (e) => {
+                document.getElementById('prompt').value = e.results[0][0].transcript;
+                document.getElementById('micBtn').classList.remove('rec');
+                send();
+              };
+              recognition.onerror = () => { document.getElementById('micBtn').classList.remove('rec'); setOrbMode('idle'); };
+              recognition.onend = () => { document.getElementById('micBtn').classList.remove('rec'); };
+            }
+
+            function toggleMic() {
+              if (!recognition) { alert("تشخیص صوت روی این دستگاه فعال نیست."); return; }
+              const btn = document.getElementById('micBtn');
+              if (btn.classList.contains('rec')) {
+                recognition.stop();
+                setOrbMode('idle');
+              } else {
+                stopSpeech();
+                btn.classList.add('rec');
+                setOrbMode('listening');
+                recognition.start();
+              }
+            }
+          </script>
+          </body>
+          </html>
+          EOF
+
+      - name: Generate Gradle Wrapper & Build APK
+        run: |
+          gradle wrapper --gradle-version 8.5
+          chmod +x gradlew
+          ./gradlew assembleDebug
+          cp app/build/outputs/apk/debug/app-debug.apk alter-latest.apk
+
+      - name: Publish OTA Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.tag.outputs.name }}
-          name: ALTER Build ${{ steps.tag.outputs.name }}
-          draft: false
+          tag_name: latest
+          name: ALTER AI Latest OTA Build
+          files: alter-latest.apk
           prerelease: false
-          fail_on_unmatched_files: true
-          files: ${{ steps.apk.outputs.path }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
